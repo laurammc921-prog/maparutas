@@ -1,0 +1,383 @@
+<script type="text/javascript">
+        var gk_isXlsx = false;
+        var gk_xlsxFileLookup = {};
+        var gk_fileData = {};
+        function filledCell(cell) {
+          return cell !== '' && cell != null;
+        }
+        function loadFileData(filename) {
+        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
+            try {
+                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
+                var firstSheetName = workbook.SheetNames[0];
+                var worksheet = workbook.Sheets[firstSheetName];
+
+                // Convert sheet to JSON to filter blank rows
+                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+                // Filter out blank rows (rows where all cells are empty, null, or undefined)
+                var filteredData = jsonData.filter(row => row.some(filledCell));
+
+                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
+                var headerRowIndex = filteredData.findIndex((row, index) =>
+                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+                );
+                // Fallback
+                if (headerRowIndex === -1 || headerRowIndex > 25) {
+                  headerRowIndex = 0;
+                }
+
+                // Convert filtered JSON back to CSV
+                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
+                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
+                return csv;
+            } catch (e) {
+                console.error(e);
+                return "";
+            }
+        }
+        return gk_fileData[filename] || "";
+        }
+        </script><!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mapa de Distribución en Duitama</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet-routing-machine@3.2.12/dist/leaflet-routing-machine.css" />
+    <style>
+        #map { height: 600px; width: 100%; }
+        .legend {
+            position: absolute;
+            bottom: 10px;
+            left: 20px;
+            background: white;
+            padding: 8px;
+            border: 1px solid #ccc;
+            z-index: 1000;
+            width: 250px;
+            min-height: 100px;
+            font-size: 12px;
+        }
+        .legend h4 { 
+            margin: 0 0 8px; 
+            font-size: 14px;
+        }
+        .legend div { 
+            margin-bottom: 3px;
+        }
+        .leaflet-routing-container {
+            display: none;
+            position: absolute;
+            right: 10px;
+            width: 300px;
+            background: white;
+            border: 1px solid #ccc;
+            z-index: 999;
+        }
+        .leaflet-routing-container .close-btn {
+            position: absolute;
+            top: 5px;
+            right: 5px;
+            background: red;
+            color: white;
+            cursor: pointer;
+            padding: 5px;
+            z-index: 1001;
+        }
+        .como-llegar {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: white;
+            border: 1px solid #ccc;
+            z-index: 1000;
+            width: 300px;
+        }
+        .como-llegar.collapsed .route-list {
+            display: none;
+        }
+        .como-llegar .toggle-btn {
+            padding: 5px;
+            cursor: pointer;
+            width: 100%;
+            text-align: left;
+            background: #f0f0f0;
+            border: none;
+            font-size: 14px;
+        }
+        .como-llegar h4 { margin: 0 0 10px; }
+        .como-llegar button {
+            margin: 2px;
+            padding: 5px;
+            cursor: pointer;
+            width: 80px;
+        }
+        .como-llegar div.route-list div { margin-bottom: 5px; }
+    </style>
+</head>
+<body>
+    <div id="map"></div>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/leaflet-routing-machine@3.2.12/dist/leaflet-routing-machine.js"></script>
+    <script>
+        // Initialize map centered on Duitama
+        const map = L.map('map').setView([5.825, -73.034], 13);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+        }).addTo(map);
+
+        // Warehouse coordinates
+        const warehouse = { lat: 5.825, lng: -73.034, name: "Bodega (Inicio/Fin)" };
+
+        // Store data (30 stores, 6 per route, ~2–3 km apart, within 7 km)
+        const stores = [
+            // Ruta 1: S1–S6 (200 units, 26.2 km, downtown near Carrera 15)
+            { id: "S1", lat: 5.8280, lng: -73.0380, demand: 33 }, // Start
+            { id: "S2", lat: 5.8240, lng: -73.0320, demand: 33 }, // Start
+            { id: "S3", lat: 5.8180, lng: -73.0430, demand: 33 }, // Middle
+            { id: "S4", lat: 5.8230, lng: -73.0480, demand: 33 }, // Middle
+            { id: "S5", lat: 5.8140, lng: -73.0540, demand: 34 }, // End
+            { id: "S6", lat: 5.8100, lng: -73.0590, demand: 34 }, // End
+            // Ruta 2: S7–S12 (200 units, 48.3 km, northwest near Troncal Central del Norte)
+            { id: "S7", lat: 5.8300, lng: -73.0590, demand: 33 }, // Start
+            { id: "S8", lat: 5.8330, lng: -73.0630, demand: 33 }, // Start
+            { id: "S9", lat: 5.8390, lng: -73.0700, demand: 33 }, // Middle
+            { id: "S10", lat: 5.8420, lng: -73.0750, demand: 33 }, // Middle
+            { id: "S11", lat: 5.8480, lng: -73.0820, demand: 34 }, // End
+            { id: "S12", lat: 5.8510, lng: -73.0890, demand: 34 }, // End
+            // Ruta 3: S13–S18 (200 units, 37.8 km, south near Av. Circunvalar)
+            { id: "S13", lat: 5.7830, lng: -73.0440, demand: 33 }, // Start
+            { id: "S14", lat: 5.7800, lng: -73.0490, demand: 33 }, // Start
+            { id: "S15", lat: 5.7740, lng: -73.0550, demand: 33 }, // Middle
+            { id: "S16", lat: 5.7700, lng: -73.0600, demand: 33 }, // Middle
+            { id: "S17", lat: 5.7640, lng: -73.0660, demand: 34 }, // End
+            { id: "S18", lat: 5.7600, lng: -73.0710, demand: 34 }, // End
+            // Ruta 4: S19–S24 (200 units, 20.5 km, north near Calle 20)
+            { id: "S19", lat: 5.8400, lng: -73.0330, demand: 33 }, // Start
+            { id: "S20", lat: 5.8430, lng: -73.0290, demand: 33 }, // Start
+            { id: "S21", lat: 5.8490, lng: -73.0360, demand: 33 }, // Middle
+            { id: "S22", lat: 5.8520, lng: -73.0400, demand: 33 }, // Middle
+            { id: "S23", lat: 5.8580, lng: -73.0450, demand: 34 }, // End
+            { id: "S24", lat: 5.8610, lng: -73.0500, demand: 34 }, // End
+            // Ruta 5: S25–S30 (200 units, 88.0 km, east near Vía Sogamoso)
+            { id: "S25", lat: 5.8490, lng: -73.0230, demand: 33 }, // Start
+            { id: "S26", lat: 5.8540, lng: -73.0180, demand: 33 }, // Start
+            { id: "S27", lat: 5.8610, lng: -73.0130, demand: 33 }, // Middle
+            { id: "S28", lat: 5.8670, lng: -73.0080, demand: 33 }, // Middle
+            { id: "S29", lat: 5.8740, lng: -73.0040, demand: 34 }, // End
+            { id: "S30", lat: 5.8810, lng: -73.0010, demand: 34 }  // End
+        ];
+
+        // Custom Formatter to suppress time
+        var CustomFormatter = L.Routing.Formatter.extend({
+            formatInstruction: function(instr) {
+                var distance = this.formatDistance(instr.distance);
+                var instruction = this._getInstructionTemplate(instr, instr.length);
+                return distance + ' - ' + instruction;
+            },
+            _getInstructionTemplate: function(instr) {
+                var type = instr.type;
+                var road = instr.road || '';
+                var text = '';
+                switch (type) {
+                    case 'Straight':
+                        text = 'Continue';
+                        break;
+                    case 'SlightRight':
+                        text = 'Slight right';
+                        break;
+                    case 'Right':
+                        text = 'Turn right';
+                        break;
+                    case 'SharpRight':
+                        text = 'Sharp right';
+                        break;
+                    case 'TurnAround':
+                        text = 'Turn around';
+                        break;
+                    case 'SharpLeft':
+                        text = 'Sharp left';
+                        break;
+                    case 'Left':
+                        text = 'Turn left';
+                        break;
+                    case 'SlightLeft':
+                        text = 'Slight left';
+                        break;
+                    case 'WaypointReached':
+                        text = 'Waypoint reached';
+                        break;
+                    case 'Roundabout':
+                        text = 'Take the ' + instr.exit + ' exit in the roundabout';
+                        break;
+                    case 'StartAt':
+                        text = 'Start at';
+                        break;
+                    case 'DestinationReached':
+                        text = 'Destination reached';
+                        break;
+                    case 'Fork':
+                        text = 'At the fork take the ' + (instr.direction.toLowerCase() === 'left' ? 'left' : 'right');
+                        break;
+                    case 'Merge':
+                        text = 'Merge';
+                        break;
+                    case 'OnRamp':
+                        text = 'Turn on the ramp';
+                        break;
+                    case 'OffRamp':
+                        text = 'Take the ramp';
+                        break;
+                    case 'EndOfRoad':
+                        text = 'Turn at the end of the road';
+                        break;
+                    case 'Continue':
+                        text = 'Continue';
+                        break;
+                }
+                if (road) {
+                    text += ' on ' + road;
+                }
+                return text;
+            }
+        });
+
+        // Optimized routes (5 routes, demands: 200 each)
+        const routes = [
+            { stores: ["S1", "S2", "S3", "S4", "S5", "S6"], color: "red", distance: 26.2 },
+            { stores: ["S7", "S8", "S9", "S10", "S11", "S12"], color: "blue", distance: 48.3 },
+            { stores: ["S13", "S14", "S15", "S16", "S17", "S18"], color: "green", distance: 37.8 },
+            { stores: ["S19", "S20", "S21", "S22", "S23", "S24"], color: "orange", distance: 20.5 },
+            { stores: ["S25", "S26", "S27", "S28", "S29", "S30"], color: "purple", distance: 88.0 }
+        ];
+
+        // Layer group for layer control and panel tracking
+        const routeLayers = {};
+        const routePanels = {};
+
+        // Process each route
+        routes.forEach((route, index) => {
+            const waypoints = [
+                L.latLng(warehouse.lat, warehouse.lng),
+                ...route.stores.map(id => {
+                    const store = stores.find(s => s.id === id);
+                    return L.latLng(store.lat, store.lng);
+                }),
+                L.latLng(warehouse.lat, warehouse.lng)
+            ];
+
+            // Add route using Leaflet Routing Machine with custom formatter
+            const routeControl = L.Routing.control({
+                waypoints: waypoints,
+                router: L.Routing.osrmv1({
+                    serviceUrl: 'https://router.project-osrm.org/route/v1'
+                }),
+                lineOptions: {
+                    styles: [{ color: route.color, weight: 4 }]
+                },
+                formatter: new CustomFormatter(),
+                summaryTemplate: '<h2>{name}</h3><h3>{distance}</h3>',
+                createMarker: (i, wp, n) => {
+                    if (i === 0 || i === n - 1) return null; // Skip warehouse markers
+                    const store = stores.find(s => s.lat === wp.latLng.lat && s.lng === wp.latLng.lng);
+                    return L.marker(wp.latLng).bindPopup(
+                        `Tienda: ${store.id}<br>Demanda: ${store.demand} unidades<br>Secuencia: ${i}`
+                    );
+                },
+                show: true
+            }).addTo(map);
+
+            // Add close button to each panel and position below Cómo Llegar
+            setTimeout(() => {
+                const panel = routeControl.getContainer();
+                panel.id = `route-panel-${index + 1}`;
+                const comoLlegar = document.querySelector('.como-llegar');
+                const comoLlegarHeight = comoLlegar ? comoLlegar.offsetHeight : 100;
+                panel.style.top = `${comoLlegarHeight + 20}px`;
+                const closeBtn = L.DomUtil.create('div', 'close-btn');
+                closeBtn.innerHTML = 'X';
+                closeBtn.onclick = function() {
+                    panel.style.display = 'none';
+                };
+                panel.appendChild(closeBtn);
+                routePanels[`Ruta ${index + 1}`] = panel;
+            }, 1000);
+
+            routeLayers[`Ruta ${index + 1}`] = routeControl;
+        });
+
+        // Add layer control
+        L.control.layers({}, routeLayers, { position: 'topright', collapsed: true }).addTo(map);
+
+        // Add legend in bottom-left
+        const legend = L.control({ position: 'bottomleft' });
+        legend.onAdd = function () {
+            const div = L.DomUtil.create('div', 'legend');
+            div.innerHTML = '<h4>Leyenda</h4>';
+            routes.forEach((route, index) => {
+                const totalDemand = route.stores.reduce((sum, id) => {
+                    const store = stores.find(s => s.id === id);
+                    return sum + store.demand;
+                }, 0);
+                div.innerHTML += `<div><span style="color:${route.color};">■</span> Ruta ${index + 1}: ${route.stores.length} tiendas, ${totalDemand} unidades</div>`;
+            });
+            return div;
+        };
+        legend.addTo(map);
+
+        // Add Cómo Llegar control with toggle button
+        const comoLlegar = L.control({ position: 'topright' });
+        comoLlegar.onAdd = function () {
+            const div = L.DomUtil.create('div', 'como-llegar collapsed');
+            div.innerHTML = `
+                <button class="toggle-btn">Cómo Llegar ▼</button>
+                <div class="route-list">
+                    <h4>Cómo Llegar</h4>
+                    ${routes.map((route, index) => `
+                        <div>
+                            Ruta ${index + 1}
+                            <button onclick="showPanel('route-panel-${index + 1}')">Mostrar</button>
+                            <button onclick="hidePanel('route-panel-${index + 1}')">Ocultar</button>
+                        </div>
+                    `).join('')}
+                </div>`;
+            const toggleBtn = div.querySelector('.toggle-btn');
+            toggleBtn.onclick = function() {
+                const routeList = div.querySelector('.route-list');
+                const isCollapsed = div.classList.contains('collapsed');
+                div.classList.toggle('collapsed', !isCollapsed);
+                toggleBtn.innerHTML = isCollapsed ? 'Cómo Llegar ▼' : 'Cómo Llegar ▲';
+                Object.values(routePanels).forEach(panel => {
+                    if (panel.style.display !== 'none') {
+                        const comoLlegarHeight = div.offsetHeight;
+                        panel.style.top = `${comoLlegarHeight + 20}px`;
+                    }
+                });
+            };
+            return div;
+        };
+        comoLlegar.addTo(map);
+
+        // Functions to show/hide panels, ensuring only one is visible
+        window.showPanel = function(panelId) {
+            Object.values(routePanels).forEach(panel => {
+                panel.style.display = 'none';
+            });
+            const panel = document.getElementById(panelId);
+            if (panel) {
+                const comoLlegar = document.querySelector('.como-llegar');
+                const comoLlegarHeight = comoLlegar ? comoLlegar.offsetHeight : 100;
+                panel.style.top = `${comoLlegarHeight + 20}px`;
+                panel.style.display = 'block';
+            }
+        };
+        window.hidePanel = function(panelId) {
+            const panel = document.getElementById(panelId);
+            if (panel) {
+                panel.style.display = 'none';
+            }
+        };
+    </script>
+</body>
+</html>
